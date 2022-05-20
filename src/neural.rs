@@ -3,7 +3,11 @@ use std::ops::{Add, Mul, Sub};
 use rand::distributions::Uniform;
 use serde::{Deserialize, Serialize};
 
-use crate::matrix::{Matrix, Result, VectorAxis};
+use crate::{
+    dot_product::DotProduct,
+    matrix::{Matrix, Result},
+    vector::{ColumnVector, Vector},
+};
 
 pub fn sigmoid(x: f64) -> f64 {
     1.0 / (1.0 + (-x).exp())
@@ -22,12 +26,35 @@ pub fn unifom_distrib(n: f64) -> Uniform<f64> {
     Uniform::new_inclusive(min, max)
 }
 
+pub struct TestCase {
+    input: ColumnVector,
+    expected_output: ColumnVector,
+}
+
+impl TestCase {
+    pub fn new(input: ColumnVector, expected_output: ColumnVector) -> Self {
+        Self {
+            input,
+            expected_output,
+        }
+    }
+
+    pub fn input(&self) -> &ColumnVector {
+        &self.input
+    }
+
+    pub fn expected_output(&self) -> &ColumnVector {
+        &self.expected_output
+    }
+}
+
 impl NeuralNetwork {
     pub fn new(input: usize, hidden: usize, output: usize, learning_rate: f64) -> Self {
+        let mut rng = rand::thread_rng();
         let mut hidden_weights = Matrix::new(hidden, input);
         let mut output_weights = Matrix::new(output, hidden);
-        hidden_weights.randomize(&unifom_distrib(hidden as f64));
-        output_weights.randomize(&unifom_distrib(output as f64));
+        hidden_weights.randomize(&unifom_distrib(hidden as f64), &mut rng);
+        output_weights.randomize(&unifom_distrib(output as f64), &mut rng);
         NeuralNetwork {
             learning_rate,
             hidden_weights,
@@ -49,7 +76,7 @@ impl NeuralNetwork {
     //         .add(target)
     // }
 
-    pub fn train(&mut self, input: &Matrix, output: &Matrix) -> Result<()> {
+    pub fn train(&mut self, input: &ColumnVector, output: &ColumnVector) -> Result<()> {
         // // Feed forward
         // let hidden_outputs = self.hidden_weights.dot(input)?.map(sigmoid);
         // let final_outputs = self.output_weights.dot(&hidden_outputs)?.map(sigmoid);
@@ -91,7 +118,6 @@ impl NeuralNetwork {
         let added_mat = self.output_weights.add(&scaled_mat)?;
         self.output_weights = added_mat;
 
-
         let sigmoid_primed_mat = hidden_outputs.sigmoid_prime();
         let multiplied_mat = hidden_errors.mul(&sigmoid_primed_mat)?;
         let transposed_mat = input.transpose();
@@ -103,37 +129,37 @@ impl NeuralNetwork {
         Ok(())
     }
 
-    pub fn predict(&self, input: &Matrix) -> Result {
+    pub fn predict(&self, input: &ColumnVector) -> Result<ColumnVector> {
         let hidden_outputs = self.hidden_weights.dot(input)?.map(sigmoid);
         let final_outputs = self.output_weights.dot(&hidden_outputs)?.map(sigmoid);
         Ok(final_outputs.soft_max())
     }
 
-    pub fn train_batch<'a, I>(&mut self, batch: I) -> Result<()>
+    pub fn train_batch<'a, I, T>(&mut self, batch: I) -> Result<()>
     where
-        I: IntoIterator<Item = (&'a Matrix, &'a Matrix)>,
+        I: IntoIterator<Item = T>,
+        T: Into<TestCase>,
     {
-        for (i, (input, output)) in batch.into_iter().enumerate() {
+        for (i, test_case) in batch.into_iter().map(Into::into).enumerate() {
             if i % 100 == 0 {
                 println!("Data N°{}", i);
             }
-            let flattened = input.to_vector(VectorAxis::Column);
-            self.train(&flattened, output)?;
+            self.train(test_case.input(), test_case.expected_output())?;
         }
         Ok(())
     }
 
-    pub fn test_prediction<'a, F, I>(&self, batch: I, grade_fn: F) -> Result<f64>
+    pub fn test_prediction<'a, F, T, I>(&self, batch: I, grade_fn: F) -> Result<f64>
     where
-        I: IntoIterator<Item = (&'a Matrix, &'a Matrix)>,
-        F: Fn(&Matrix, &Matrix) -> f64,
+        I: IntoIterator<Item = T>,
+        T: Into<TestCase>,
+        F: Fn(&ColumnVector, &ColumnVector) -> f64,
     {
         let mut correct = 0.0;
         let mut count = 0.0;
-        for (input, output) in batch {
-            let flattened = input.to_vector(VectorAxis::Column);
-            let prediction = self.predict(&flattened)?;
-            correct += grade_fn(&prediction, &output);
+        for test_case in batch.into_iter().map(Into::into) {
+            let prediction = self.predict(test_case.input())?;
+            correct += grade_fn(&prediction, test_case.expected_output());
             count += 1.0;
         }
         Ok(correct / count)

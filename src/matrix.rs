@@ -1,50 +1,30 @@
 use std::{
     fmt::Display,
-    ops::{Add, Index, IndexMut, Mul, Sub, Div},
+    ops::{Add, Deref, DerefMut, Div, Mul, Sub},
+    slice::Iter,
 };
 
-use rand::{distributions::Distribution};
+use rand::{distributions::Distribution, Rng};
 use serde::{Deserialize, Serialize};
+
+use crate::vector::{ColumnVector, RowVector, Vector};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Matrix {
-    data: Vec<Vec<f64>>,
+    data: Vec<RowVector>,
 }
 
 #[derive(Debug)]
 pub enum MatrixOpError {
-    SizeMismatch {
-        expected: (usize, usize),
-        actual: (usize, usize),
-        operation: &'static str,
-    },
-    DotProductSizeMismatch {
-        expected: usize,
-        actual: usize,
-    },
+    SizeMismatch,
+    DotProductSizeMismatch,
 }
 
 impl Display for MatrixOpError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            MatrixOpError::SizeMismatch {
-                expected,
-                actual,
-                operation,
-            } => {
-                write!(
-                    f,
-                    "Size mismatch: expected {:?}, actual {:?}, operation: {}",
-                    expected, actual, operation
-                )
-            }
-            MatrixOpError::DotProductSizeMismatch { expected, actual } => {
-                write!(
-                    f,
-                    "Size mismatch: expected {:?}, actual {:?}",
-                    expected, actual
-                )
-            }
+            MatrixOpError::SizeMismatch => write!(f, "Size mismatch"),
+            MatrixOpError::DotProductSizeMismatch => write!(f, "Dot product size mismatch"),
         }
     }
 }
@@ -53,53 +33,51 @@ impl std::error::Error for MatrixOpError {}
 
 pub type Result<R = Matrix> = std::result::Result<R, MatrixOpError>;
 
-pub enum VectorAxis {
-    Row,
-    Column,
+pub struct ColIter<'a> {
+    matrix: &'a Matrix,
+    index: usize,
+}
+
+impl ColIter<'_> {
+    pub fn new(matrix: &Matrix) -> ColIter {
+        ColIter { matrix, index: 0 }
+    }
+}
+
+impl Iterator for ColIter<'_> {
+    type Item = ColumnVector;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let col = self.matrix.col(self.index);
+        self.index += 1;
+        col
+    }
 }
 
 impl Matrix {
     pub fn new(rows: usize, cols: usize) -> Matrix {
-        Self::from_vec(vec![vec![0.0; cols]; rows])
-    }
-
-    pub fn new_filled(rows: usize, cols: usize, value: f64) -> Matrix {
-        Self::from_vec(vec![vec![value; cols]; rows])
-    }
-
-    pub fn from_vec(data: Vec<Vec<f64>>) -> Matrix {
+        let data = vec![RowVector::new(cols); rows];
         Matrix { data }
     }
 
-    pub fn randomize<D: Distribution<f64>>(&mut self, distribution: D) {
+    pub fn new_filled(rows: usize, cols: usize, value: f64) -> Matrix {
+        let data = vec![RowVector::new_filled(cols, value); rows];
+        Matrix { data }
+    }
+
+    // pub fn from_vec(data: Vec<Vec<f64>>) -> Matrix {
+    //     data.into_iter().map(RowVector::from_vec).collect()
+    // }
+
+    pub fn randomize<D: Distribution<f64>, R: Rng>(&mut self, distribution: D, rng: &mut R) {
         for row in self.data.iter_mut() {
-            for elem in row.iter_mut() {
-                *elem = distribution.sample(&mut rand::thread_rng());
-            }
+            row.randomize(&distribution, rng);
         }
     }
 
-    // pub fn randomize(&mut self, n: usize) {
-    //     fn unifom_distribution(low: f64, high:f64) -> f64 {
-    //         let range = high - low;
-    //         let scale = 10000.0;
-    //         let scaled_range = (range * scale) as usize;
-    //         let rnd = rand::thread_rng().gen_range(0..scaled_range);
-    //         ((rnd as f64) / scale) + low
-    //     }
-
-    //     let min = -1.0 / n as f64;
-    //     let max = 1.0 / n as f64;
-    //     for row in self.data.iter_mut() {
-    //         for elem in row.iter_mut() {
-    //             *elem = unifom_distribution(min, max);
-    //         }
-    //     }
-    // }
-
     pub fn max_arg(&self) -> (usize, usize) {
         let mut max_arg = (0, 0);
-        let mut max_val = self[(0, 0)];
+        let mut max_val = self[0][0];
 
         for (row, row_vec) in self.data.iter().enumerate() {
             for (col, elem) in row_vec.iter().enumerate() {
@@ -114,28 +92,7 @@ impl Matrix {
     }
 
     pub fn flatten(&self) -> impl Iterator<Item = f64> + '_ {
-        self.data
-            .iter()
-            .flat_map(|row| row.iter())
-            .copied()
-    }
-
-    pub fn to_vector(&self, axis: VectorAxis) -> Matrix {
-        let mut mat = match axis {
-            VectorAxis::Column => Matrix::new(self.rows() * self.cols(), 1),
-            VectorAxis::Row => Matrix::new(1, self.rows() * self.cols()),
-        };
-        for (row, row_vec) in self.data.iter().enumerate() {
-            for (col, elem) in row_vec.iter().enumerate() {
-                let index = row * self.cols() + col;
-                let index = match axis {
-                    VectorAxis::Column => (index, 0),
-                    VectorAxis::Row => (0, index),
-                };
-                mat[index] = *elem;
-            }
-        }
-        mat
+        self.iter().flat_map(|row| row.iter()).copied()
     }
 
     pub fn clear(&mut self) {
@@ -154,112 +111,88 @@ impl Matrix {
         }
     }
 
-    pub fn cols(&self) -> usize {
+    pub fn cols_count(&self) -> usize {
         self.data.first().map(|row| row.len()).unwrap_or(0)
     }
 
-    pub fn rows(&self) -> usize {
+    pub fn col(&self, col_index: usize) -> Option<ColumnVector> {
+        if col_index >= self.cols_count() {
+            return None;
+        }
+        let vec: Vec<f64> = self.data.iter().map(|row| row[col_index]).collect();
+        Some(vec.into())
+    }
+
+    pub fn cols(&self) -> ColIter {
+        ColIter::new(self)
+    }
+
+    pub fn rows_count(&self) -> usize {
         self.data.len()
     }
 
+    pub fn row(&self, row_index: usize) -> Option<&RowVector> {
+        self.data.get(row_index)
+    }
+
+    pub fn rows(&self) -> Iter<'_, RowVector> {
+        self.data.iter()
+    }
+
     pub fn size(&self) -> (usize, usize) {
-        (self.rows(), self.cols())
+        (self.rows_count(), self.cols_count())
     }
 
     pub fn transpose(&self) -> Matrix {
-        let mut result = Matrix::new(self.cols(), self.rows());
-        for i in 0..self.rows() {
-            for j in 0..self.cols() {
-                result[(j, i)] = self[(i, j)];
+        let mut result = Matrix::new(self.cols_count(), self.rows_count());
+        for i in 0..self.rows_count() {
+            for j in 0..self.cols_count() {
+                result[j][i] = self[i][j];
             }
         }
         result
     }
 
-    pub fn dot(&self, other: &Matrix) -> Result {
-        if self.cols() != other.rows() {
-            return Err(MatrixOpError::DotProductSizeMismatch {
-                expected: self.cols(),
-                actual: other.rows(),
-            });
-        }
-        let mut result = Matrix::new(self.rows(), other.cols());
-        for i in 0..self.rows() {
-            for j in 0..other.cols() {
-                let mut sum = 0.0;
-                for k in 0..self.cols() {
-                    sum += self[(i, k)] * other[(k, j)];
-                }
-                result[(i, j)] = sum;
-            }
-        }
-        Ok(result)
-    }
-
     pub fn map<F: Fn(f64) -> f64>(&self, f: F) -> Matrix {
-        let mut mat = Matrix::new(self.rows(), self.cols());
+        let mut mat = Matrix::new(self.rows_count(), self.cols_count());
         for (row, row_vec) in self.data.iter().enumerate() {
             for (col, elem) in row_vec.iter().enumerate() {
-                mat[(row, col)] = f(*elem);
+                mat[row][col] = f(*elem);
             }
         }
         mat
     }
 
-    fn check_size(&self, other: &Self, operation: &'static str) -> Result<()> {
+    fn check_size(&self, other: &Self) -> Result<()> {
         if self.size() != other.size() {
-            return Err(MatrixOpError::SizeMismatch {
-                expected: self.size(),
-                actual: other.size(),
-                operation,
-            });
+            return Err(MatrixOpError::SizeMismatch);
         }
         Ok(())
     }
 
-    fn apply<F: Fn(f64, f64) -> f64>(
-        &self,
-        other: &Matrix,
-        f: F,
-        operation: &'static str,
-    ) -> Result {
-        self.check_size(other, operation)?;
-        let mut mat = Matrix::new(self.rows(), self.cols());
+    fn apply<F: Fn(f64, f64) -> f64>(&self, other: &Matrix, f: F) -> Result {
+        self.check_size(other)?;
+        let mut mat = Matrix::new(self.rows_count(), self.cols_count());
         for (row, row_vec) in mat.data.iter_mut().enumerate() {
             for (col, elem) in row_vec.iter_mut().enumerate() {
-                *elem = f(self[(row, col)], other[(row, col)]);
+                *elem = f(self[row][col], other[row][col]);
             }
         }
         Ok(mat)
     }
+}
 
-    pub fn sigmoid_prime(&self) -> Matrix {
-        let result = Matrix::new_filled(self.rows(), self.cols(), 1.0)
-            .sub(self)
-            .and_then(|ref m| m * self);
+impl Deref for Matrix {
+    type Target = [RowVector];
 
-        unsafe {
-            result.unwrap_unchecked()
-        }
-    }
-
-    pub fn soft_max(&self) -> Matrix {
-        let total: f64 = self.flatten().map(f64::exp).sum();
-        self.map(f64::exp).div(total)
+    fn deref(&self) -> &Self::Target {
+        &self.data
     }
 }
 
-impl Index<(usize, usize)> for Matrix {
-    type Output = f64;
-
-    fn index(&self, (row, col): (usize, usize)) -> &f64 {
-        &self.data[row][col]
-    }
-}
-
-impl IndexMut<(usize, usize)> for Matrix {
-    fn index_mut(&mut self, (row, col): (usize, usize)) -> &mut f64 {
-        &mut self.data[row][col]
+impl DerefMut for Matrix {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.data
     }
 }
 
@@ -267,7 +200,7 @@ impl Add for &Matrix {
     type Output = Result;
 
     fn add(self, other: &Matrix) -> Self::Output {
-        self.apply(&other, f64::add, "add")
+        self.apply(&other, f64::add)
     }
 }
 
@@ -275,7 +208,7 @@ impl Sub for &Matrix {
     type Output = Result;
 
     fn sub(self, other: &Matrix) -> Self::Output {
-        self.apply(&other, f64::sub, "sub")
+        self.apply(&other, f64::sub)
     }
 }
 
@@ -283,7 +216,7 @@ impl Mul for &Matrix {
     type Output = Result;
 
     fn mul(self, other: &Matrix) -> Self::Output {
-        self.apply(&other, f64::mul, "mul")
+        self.apply(&other, f64::mul)
     }
 }
 
@@ -310,3 +243,47 @@ impl Div<f64> for &Matrix {
         self.map(|x| x / other)
     }
 }
+
+// impl From<Vec<Vec<f64>>> for Matrix {
+//     fn from(data: Vec<Vec<f64>>) -> Self {
+//         Matrix::from_vec(data)
+//     }
+// }
+
+impl FromIterator<RowVector> for Matrix {
+    fn from_iter<T: IntoIterator<Item = RowVector>>(iter: T) -> Self {
+        let data: Vec<RowVector> = iter.into_iter().collect();
+        Matrix { data }
+    }
+}
+
+// impl FromIterator<ColumnVector> for Matrix {
+//     fn from_iter<T: IntoIterator<Item = ColumnVector>>(iter: T) -> Self {
+//         let data:Vec<Vec<f64>> = iter.into_iter().map(|vec| vec.to_vec()).collect();
+//         data.into()
+//     }
+// }
+
+// impl DotProduct<Matrix> for Matrix {
+
+//     type Output = Result;
+
+//     fn dot(&self, other: &Matrix) -> Result {
+//         self.rows()
+//         .map(|row| other.cols()
+//             .map(|col| row.dot(&col))
+//             .try_collect())
+//         .try_collect()
+//     }
+// }
+
+// impl DotProduct<Vector> for Matrix {
+
+//     type Output = Result<Vector>;
+
+//     fn dot(&self, other: &Vector) -> Result<Vector> {
+//         self.rows()
+//         .map(|row| row.dot(other))
+//         .try_collect()
+//     }
+// }
