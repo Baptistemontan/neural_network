@@ -146,20 +146,17 @@ impl NeuralNetwork {
             .into_iter()
             .map(Into::<TestCase>::into)
             .map(TestCase::collapse);
-        for (i, (input, expected_output)) in iter.enumerate() {
-            if i % 100 == 0 {
-                println!("Data N°{}", i);
-            }
+        for (input, expected_output) in iter {
             self.train(input, expected_output)?;
         }
         Ok(())
     }
 
-    pub fn predict_batch<F, T, I>(&self, batch: I, grade_fn: F) -> Result<f64>
+    pub fn predict_batch<F, T, I>(&self, batch: I, mut grade_fn: F) -> Result<f64>
     where
         I: IntoIterator<Item = T>,
         T: Into<TestCase>,
-        F: Fn(ColumnVector, ColumnVector) -> f64,
+        F: FnMut(ColumnVector, ColumnVector) -> f64,
     {
         let mut correct = 0.0;
         let mut count = 0.0;

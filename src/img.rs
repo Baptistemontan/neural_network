@@ -60,8 +60,8 @@ impl Img {
     }
 }
 
-impl From<Img> for TestCase {
-    fn from(img: Img) -> Self {
+impl From<&Img> for TestCase {
+    fn from(img: &Img) -> Self {
         let input: ColumnVector = img.pixels.flatten().collect();
         let mut output = ColumnVector::new(10);
         output[img.label] = 1.0;

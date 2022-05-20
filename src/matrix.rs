@@ -1,7 +1,6 @@
 use std::{
     fmt::Display,
     ops::{Add, Deref, DerefMut, Div, Mul, Sub},
-    slice::Iter,
 };
 
 use rand::{distributions::Distribution, Rng};
@@ -64,10 +63,6 @@ impl Matrix {
         let data = vec![RowVector::new_filled(cols, value); rows];
         Matrix { data }
     }
-
-    // pub fn from_vec(data: Vec<Vec<f64>>) -> Matrix {
-    //     data.into_iter().map(RowVector::from_vec).collect()
-    // }
 
     pub fn randomize<D: Distribution<f64>, R: Rng>(&mut self, distribution: D, rng: &mut R) {
         for row in self.data.iter_mut() {
@@ -133,10 +128,6 @@ impl Matrix {
 
     pub fn row(&self, row_index: usize) -> Option<&RowVector> {
         self.data.get(row_index)
-    }
-
-    pub fn rows(&self) -> Iter<'_, RowVector> {
-        self.data.iter()
     }
 
     pub fn size(&self) -> (usize, usize) {
@@ -244,46 +235,9 @@ impl Div<f64> for &Matrix {
     }
 }
 
-// impl From<Vec<Vec<f64>>> for Matrix {
-//     fn from(data: Vec<Vec<f64>>) -> Self {
-//         Matrix::from_vec(data)
-//     }
-// }
-
 impl FromIterator<RowVector> for Matrix {
     fn from_iter<T: IntoIterator<Item = RowVector>>(iter: T) -> Self {
         let data: Vec<RowVector> = iter.into_iter().collect();
         Matrix { data }
     }
 }
-
-// impl FromIterator<ColumnVector> for Matrix {
-//     fn from_iter<T: IntoIterator<Item = ColumnVector>>(iter: T) -> Self {
-//         let data:Vec<Vec<f64>> = iter.into_iter().map(|vec| vec.to_vec()).collect();
-//         data.into()
-//     }
-// }
-
-// impl DotProduct<Matrix> for Matrix {
-
-//     type Output = Result;
-
-//     fn dot(&self, other: &Matrix) -> Result {
-//         self.rows()
-//         .map(|row| other.cols()
-//             .map(|col| row.dot(&col))
-//             .try_collect())
-//         .try_collect()
-//     }
-// }
-
-// impl DotProduct<Vector> for Matrix {
-
-//     type Output = Result<Vector>;
-
-//     fn dot(&self, other: &Vector) -> Result<Vector> {
-//         self.rows()
-//         .map(|row| row.dot(other))
-//         .try_collect()
-//     }
-// }
