@@ -8,7 +8,7 @@ use csv::{Reader, StringRecord};
 
 use crate::matrix::Matrix;
 use crate::neural::TestCase;
-use crate::vector::ColumnVector;
+use crate::vector::{ColumnVector, Vector};
 
 pub struct Img {
     pixels: Matrix,
@@ -60,11 +60,11 @@ impl Img {
     }
 }
 
-impl Into<TestCase> for Img {
-    fn into(self) -> TestCase {
-        let input: ColumnVector = self.pixels.flatten().collect();
+impl From<Img> for TestCase {
+    fn from(img: Img) -> Self {
+        let input: ColumnVector = img.pixels.flatten().collect();
         let mut output = ColumnVector::new(10);
-        output[self.label] = 1.0;
+        output[img.label] = 1.0;
         TestCase::new(input, output)
     }
 }

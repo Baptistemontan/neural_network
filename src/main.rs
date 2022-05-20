@@ -11,6 +11,7 @@ mod dot_product;
 mod img;
 mod load_save;
 mod matrix;
+// mod neural_old;
 mod neural;
 mod vector;
 
@@ -27,16 +28,18 @@ pub fn train<P: AsRef<Path>>(
     csv_path: P,
     max_count: usize,
     neural_network: &mut NeuralNetwork,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<usize, Box<dyn Error>> {
     println!("Loading images...");
 
     let train_batch = load_imgs(csv_path, max_count)?;
 
-    println!("Loaded {} images", train_batch.len());
+    let size = train_batch.len();
+
+    println!("Loaded {} images", size);
 
     neural_network.train_batch(train_batch)?;
 
-    Ok(())
+    Ok(size)
 }
 
 pub fn test<P: AsRef<Path>>(
@@ -45,7 +48,7 @@ pub fn test<P: AsRef<Path>>(
     neural_network: &NeuralNetwork,
 ) -> Result<f64, Box<dyn Error>> {
     let test_batch = load_imgs(csv_path, take_count)?;
-    let prediction = neural_network.test_prediction(test_batch, |output, reference| {
+    let prediction = neural_network.predict_batch(test_batch, |output, reference| {
         let output_max = output.max_arg();
         let reference_max = reference.max_arg();
         if output_max == reference_max {
@@ -58,10 +61,20 @@ pub fn test<P: AsRef<Path>>(
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
+    let mut neural_network = NeuralNetwork::new(784, [500], 10, 0.2);
 
-    let mut neural_network = NeuralNetwork::new(784, 300, 10, 0.01);
+    let start = std::time::Instant::now();
 
-    train("data/mnist_train.csv", usize::MAX, &mut neural_network)?;
+    let batch_size = train("data/mnist_train.csv", usize::MAX, &mut neural_network)?;
+
+    let elapsed = start.elapsed();
+
+    println!("Training took {} seconds", elapsed.as_secs());
+
+    println!(
+        "Average training time per image: {} ms",
+        elapsed.as_secs_f64() / (batch_size / 1000) as f64
+    );
 
     neural_network.save("network_save/neural_network.json")?;
 

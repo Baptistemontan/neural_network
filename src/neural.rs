@@ -1,4 +1,4 @@
-use std::ops::{Add, Mul, Sub};
+use std::ops::Sub;
 
 use rand::distributions::Uniform;
 use serde::{Deserialize, Serialize};
@@ -16,8 +16,7 @@ pub fn sigmoid(x: f64) -> f64 {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NeuralNetwork {
     learning_rate: f64,
-    hidden_weights: Matrix,
-    output_weights: Matrix,
+    layers: Vec<(Matrix, ColumnVector)>,
 }
 
 pub fn unifom_distrib(n: f64) -> Uniform<f64> {
@@ -46,19 +45,40 @@ impl TestCase {
     pub fn expected_output(&self) -> &ColumnVector {
         &self.expected_output
     }
+
+    pub fn collapse(self) -> (ColumnVector, ColumnVector) {
+        (self.input, self.expected_output)
+    }
 }
 
 impl NeuralNetwork {
-    pub fn new(input: usize, hidden: usize, output: usize, learning_rate: f64) -> Self {
+    pub fn new<I>(
+        input_size: usize,
+        hidden_sizes: I,
+        output_size: usize,
+        learning_rate: f64,
+    ) -> Self
+    where
+        I: IntoIterator<Item = usize>,
+    {
         let mut rng = rand::thread_rng();
-        let mut hidden_weights = Matrix::new(hidden, input);
-        let mut output_weights = Matrix::new(output, hidden);
-        hidden_weights.randomize(&unifom_distrib(hidden as f64), &mut rng);
-        output_weights.randomize(&unifom_distrib(output as f64), &mut rng);
+        let new_layer = |last_size: &mut usize, size: usize| -> Option<(Matrix, ColumnVector)> {
+            let mut layer = Matrix::new(size, *last_size);
+            layer.randomize(&unifom_distrib(size as f64), &mut rng);
+            *last_size = size;
+            let bias = ColumnVector::new(size);
+            Some((layer, bias))
+        };
+
+        let layers: Vec<(Matrix, ColumnVector)> = hidden_sizes
+            .into_iter()
+            .chain(Some(output_size))
+            .scan(input_size, new_layer)
+            .collect();
+
         NeuralNetwork {
             learning_rate,
-            hidden_weights,
-            output_weights,
+            layers,
         }
     }
 
@@ -76,90 +96,80 @@ impl NeuralNetwork {
     //         .add(target)
     // }
 
-    pub fn train(&mut self, input: &ColumnVector, output: &ColumnVector) -> Result<()> {
-        // // Feed forward
-        // let hidden_outputs = self.hidden_weights.dot(input)?.map(sigmoid);
-        // let final_outputs = self.output_weights.dot(&hidden_outputs)?.map(sigmoid);
+    pub fn train(&mut self, input: ColumnVector, expected_output: ColumnVector) -> Result<()> {
+        let outputs = self.prediction_steps(input)?;
 
-        // // find errors
-        // let outputs_errors = output.sub(&final_outputs)?;
-        // let hidden_errors = self.output_weights.transpose().dot(&outputs_errors)?;
+        let iter = self.layers.iter_mut().zip(outputs.windows(2)).rev();
 
-        // // backpropagate
-        // self.output_weights = Self::back_propagate(
-        //     &final_outputs,
-        //     &outputs_errors,
-        //     &hidden_outputs,
-        //     self.learning_rate,
-        //     &self.output_weights,
-        // )?;
+        let mut local_expected_output = expected_output;
 
-        // self.hidden_weights = Self::back_propagate(
-        //     &hidden_outputs,
-        //     &hidden_errors,
-        //     input,
-        //     self.learning_rate,
-        //     &self.hidden_weights,
-        // )?;
+        for ((weights, bias), window) in iter {
+            let [input, result]: &[_; 2] = window.try_into().unwrap();
+            let cost = result.sub(&local_expected_output)?.scale(2.0);
+            let sigmoid_prime = result.sigmoid_prime();
+            let multiplied_mat = sigmoid_prime.mul(&cost)?.scale(self.learning_rate);
 
-        let hidden_inputs = self.hidden_weights.dot(input)?;
-        let hidden_outputs = hidden_inputs.map(sigmoid);
-        let final_inputs = self.output_weights.dot(&hidden_outputs)?;
-        let final_outputs = final_inputs.map(sigmoid);
+            *bias = bias.sub(&multiplied_mat)?;
 
-        let outputs_errors = output.sub(&final_outputs)?;
-        let hidden_errors = self.output_weights.transpose().dot(&outputs_errors)?;
+            let weight_delta = multiplied_mat.try_dot(&input.transpose())?;
+            *weights = weights.sub(&weight_delta)?;
 
-        let sigmoid_primed_mat = final_outputs.sigmoid_prime();
-        let multiplied_mat = outputs_errors.mul(&sigmoid_primed_mat)?;
-        let transposed_mat = hidden_outputs.transpose();
-        let dot_mat = multiplied_mat.dot(&transposed_mat)?;
-        let scaled_mat = dot_mat.mul(self.learning_rate);
-        let added_mat = self.output_weights.add(&scaled_mat)?;
-        self.output_weights = added_mat;
-
-        let sigmoid_primed_mat = hidden_outputs.sigmoid_prime();
-        let multiplied_mat = hidden_errors.mul(&sigmoid_primed_mat)?;
-        let transposed_mat = input.transpose();
-        let dot_mat = multiplied_mat.dot(&transposed_mat)?;
-        let scaled_mat = dot_mat.mul(self.learning_rate);
-        let added_mat = self.hidden_weights.add(&scaled_mat)?;
-        self.hidden_weights = added_mat;
+            let output_delta = multiplied_mat.transpose().try_dot(weights)?;
+            local_expected_output = input.sub(&output_delta)?;
+        }
 
         Ok(())
     }
 
-    pub fn predict(&self, input: &ColumnVector) -> Result<ColumnVector> {
-        let hidden_outputs = self.hidden_weights.dot(input)?.map(sigmoid);
-        let final_outputs = self.output_weights.dot(&hidden_outputs)?.map(sigmoid);
-        Ok(final_outputs.soft_max())
+    fn prediction_steps(&self, input: ColumnVector) -> Result<Vec<ColumnVector>> {
+        self.layers
+            .iter()
+            .try_fold(vec![input], |mut outputs, (weights, bias)| {
+                let last_output = outputs.last().unwrap();
+                let output = weights.try_dot(last_output)?.add(bias)?.map(sigmoid);
+                outputs.push(output);
+                Ok(outputs)
+            })
     }
 
-    pub fn train_batch<'a, I, T>(&mut self, batch: I) -> Result<()>
+    pub fn predict(&self, input: ColumnVector) -> Result<ColumnVector> {
+        self.prediction_steps(input)
+            .map(|mut outputs| outputs.pop().unwrap().soft_max())
+    }
+
+    pub fn train_batch<I, T>(&mut self, batch: I) -> Result<()>
     where
         I: IntoIterator<Item = T>,
         T: Into<TestCase>,
     {
-        for (i, test_case) in batch.into_iter().map(Into::into).enumerate() {
+        let iter = batch
+            .into_iter()
+            .map(Into::<TestCase>::into)
+            .map(TestCase::collapse);
+        for (i, (input, expected_output)) in iter.enumerate() {
             if i % 100 == 0 {
                 println!("Data N°{}", i);
             }
-            self.train(test_case.input(), test_case.expected_output())?;
+            self.train(input, expected_output)?;
         }
         Ok(())
     }
 
-    pub fn test_prediction<'a, F, T, I>(&self, batch: I, grade_fn: F) -> Result<f64>
+    pub fn predict_batch<F, T, I>(&self, batch: I, grade_fn: F) -> Result<f64>
     where
         I: IntoIterator<Item = T>,
         T: Into<TestCase>,
-        F: Fn(&ColumnVector, &ColumnVector) -> f64,
+        F: Fn(ColumnVector, ColumnVector) -> f64,
     {
         let mut correct = 0.0;
         let mut count = 0.0;
-        for test_case in batch.into_iter().map(Into::into) {
-            let prediction = self.predict(test_case.input())?;
-            correct += grade_fn(&prediction, test_case.expected_output());
+        for (input, expected_output) in batch
+            .into_iter()
+            .map(Into::<TestCase>::into)
+            .map(TestCase::collapse)
+        {
+            let prediction = self.predict(input)?;
+            correct += grade_fn(prediction, expected_output);
             count += 1.0;
         }
         Ok(correct / count)
