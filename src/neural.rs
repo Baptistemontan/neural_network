@@ -132,7 +132,7 @@ impl<A: ActivationFunction, O: OutputActivationFunction> NeuralNetwork<A, O> {
             |(mut activations, mut zs), (weights, bias)| {
                 let last_activation = activations.last().unwrap();
                 let z = weights.try_dot(last_activation)?.add(&bias)?;
-                let output = O::activate(&z);
+                let output = z.map(A::activate);
                 activations.push(output);
                 zs.push(z);
                 Ok((activations, zs))
@@ -141,8 +141,8 @@ impl<A: ActivationFunction, O: OutputActivationFunction> NeuralNetwork<A, O> {
     }
 
     pub fn predict(&self, input: ColumnVector) -> Result<ColumnVector> {
-        let (mut activations, _) = self.feed_forward(input)?;
-        Ok(activations.pop().unwrap().map(A::activate))
+        let (activations, _) = self.feed_forward(input)?;
+        Ok(O::activate(activations.last().unwrap()))
     }
 
     pub fn train_batch<I, T>(&mut self, batch: I) -> Result<()>
