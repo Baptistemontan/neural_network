@@ -1,6 +1,6 @@
 use crate::vector::{ColumnVector, Vector};
 
-pub trait ActivationFunction {
+pub trait ActivationFunction: Send + Sync {
     fn activate(x: f64) -> f64;
 
     fn activate_prime(x: f64) -> f64;
@@ -46,7 +46,7 @@ impl ActivationFunction for ReLUActivation {
     }
 }
 
-pub trait OutputActivationFunction {
+pub trait OutputActivationFunction: Send + Sync {
     fn activate(x: &ColumnVector) -> ColumnVector;
 }
 
