@@ -66,10 +66,10 @@ pub trait Vector: FromIterator<f64> + DerefMut<Target = [f64]> + From<Vec<f64>> 
         }
     }
 
-    // suppose that the vector has sigmoid already applied
-    fn sigmoid_prime(&self) -> Self {
-        self.iter().copied().map(|x| x - x.powi(2)).collect()
-    }
+    // // suppose that the vector has sigmoid already applied
+    // fn sigmoid_prime(&self) -> Self {
+    //     self.iter().copied().map(|x| x - x.powi(2)).collect()
+    // }
 
     fn add(&self, other: &Self) -> Result<Self> {
         self.apply(other, f64::add)
@@ -79,7 +79,7 @@ pub trait Vector: FromIterator<f64> + DerefMut<Target = [f64]> + From<Vec<f64>> 
         self.apply(other, f64::sub)
     }
 
-    fn mul(&self, other: &Self) -> Result<Self> {
+    fn hadamard_product(&self, other: &Self) -> Result<Self> {
         self.apply(other, f64::mul)
     }
 

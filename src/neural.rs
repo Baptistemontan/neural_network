@@ -1,22 +1,21 @@
-use std::ops::Sub;
+use std::{marker::PhantomData, ops::{Mul}};
 
 use rand::distributions::Uniform;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    activation::{ActivationFunction, OutputActivationFunction},
     dot_product::DotProduct,
     matrix::{Matrix, Result},
     vector::{ColumnVector, Vector},
 };
 
-pub fn sigmoid(x: f64) -> f64 {
-    1.0 / (1.0 + (-x).exp())
-}
-
 #[derive(Debug, Serialize, Deserialize)]
-pub struct NeuralNetwork {
+pub struct NeuralNetwork<D, A> {
     learning_rate: f64,
     layers: Vec<(Matrix, ColumnVector)>,
+    _hidden_layer_activation: PhantomData<D>,
+    _output_layer_activation: PhantomData<A>,
 }
 
 pub fn unifom_distrib(n: f64) -> Uniform<f64> {
@@ -37,21 +36,15 @@ impl TestCase {
             expected_output,
         }
     }
+}
 
-    pub fn input(&self) -> &ColumnVector {
-        &self.input
-    }
-
-    pub fn expected_output(&self) -> &ColumnVector {
-        &self.expected_output
-    }
-
-    pub fn collapse(self) -> (ColumnVector, ColumnVector) {
+impl Into<(ColumnVector, ColumnVector)> for TestCase {
+    fn into(self) -> (ColumnVector, ColumnVector) {
         (self.input, self.expected_output)
     }
 }
 
-impl NeuralNetwork {
+impl<A: ActivationFunction, O: OutputActivationFunction> NeuralNetwork<A, O> {
     pub fn new<I>(
         input_size: usize,
         hidden_sizes: I,
@@ -79,62 +72,77 @@ impl NeuralNetwork {
         NeuralNetwork {
             learning_rate,
             layers,
+            _hidden_layer_activation: PhantomData,
+            _output_layer_activation: PhantomData,
         }
     }
 
-    // fn back_propagate(
-    //     outputs: &Matrix,
-    //     errors: &Matrix,
-    //     input: &Matrix,
-    //     learning_rate: f64,
-    //     target: &Matrix,
-    // ) -> Result {
-    //     errors
-    //         .mul(&outputs.sigmoid_prime())?
-    //         .dot(&input.transpose())?
-    //         .mul(learning_rate)
-    //         .add(target)
-    // }
+    fn calculate_nabla_w(delta: &ColumnVector, activation: &ColumnVector) -> Result<Matrix> {
+        delta.try_dot(&activation.transpose())
+    }
 
-    pub fn train(&mut self, input: ColumnVector, expected_output: ColumnVector) -> Result<()> {
-        let outputs = self.prediction_steps(input)?;
+    fn calculate_errors(&self, mut activations: Vec<ColumnVector>, mut zs: Vec<ColumnVector> , expected_output: ColumnVector) -> Result<(Vec<ColumnVector>, Vec<Matrix>)> {
 
-        let iter = self.layers.iter_mut().zip(outputs.windows(2)).rev();
+        let last_z = zs.pop().unwrap();
+        let last_z_primed = last_z.map(A::activate_prime);
+        let final_output = activations.pop().unwrap();
+        
+        let cost_gradient = final_output.sub(&expected_output)?;
+        let delta = cost_gradient.hadamard_product(&last_z_primed)?;
+        let activation = activations.pop().unwrap();
+        let mut nabla_w = vec![Self::calculate_nabla_w(&delta, &activation)?];
+        let mut nabla_b = vec![delta];
 
-        let mut local_expected_output = expected_output;
-
-        for ((weights, bias), window) in iter {
-            let [input, result]: &[_; 2] = window.try_into().unwrap();
-            let cost = result.sub(&local_expected_output)?.scale(2.0);
-            let sigmoid_prime = result.sigmoid_prime();
-            let multiplied_mat = sigmoid_prime.mul(&cost)?.scale(self.learning_rate);
-
-            *bias = bias.sub(&multiplied_mat)?;
-
-            let weight_delta = multiplied_mat.try_dot(&input.transpose())?;
-            *weights = weights.sub(&weight_delta)?;
-
-            let output_delta = multiplied_mat.transpose().try_dot(weights)?;
-            local_expected_output = input.sub(&output_delta)?;
+        let iter = self.layers.iter().rev().zip(zs.iter().zip(activations.iter()).rev());
+        
+        
+        for ((weights, _bias), (z, activation)) in iter {
+            let z_primed = z.map(A::activate_prime);
+            let old_delta = nabla_b.last().unwrap();
+            let delta = weights.transpose().try_dot(old_delta)?.hadamard_product(&z_primed)?;
+            nabla_w.push(Self::calculate_nabla_w(&delta, &activation)?);
+            nabla_b.push(delta);
         }
+        nabla_b.reverse();
+        nabla_w.reverse();
 
+        Ok((nabla_b, nabla_w))
+    }
+
+    fn backpropagate(&mut self, nabla_b: Vec<ColumnVector>, nabla_w: Vec<Matrix>) -> Result<()> {
+        let iter = self.layers.iter_mut().zip(nabla_b.iter().zip(nabla_w.iter()));
+        for ((weights, bias), (nabla_b, nabla_w)) in iter  {
+            *weights -= &nabla_w.mul(self.learning_rate);
+            *bias = bias.sub(&(nabla_b.scale(self.learning_rate)))?;
+        }
         Ok(())
     }
 
-    fn prediction_steps(&self, input: ColumnVector) -> Result<Vec<ColumnVector>> {
-        self.layers
-            .iter()
-            .try_fold(vec![input], |mut outputs, (weights, bias)| {
-                let last_output = outputs.last().unwrap();
-                let output = weights.try_dot(last_output)?.add(bias)?.map(sigmoid);
-                outputs.push(output);
-                Ok(outputs)
-            })
+    pub fn train(&mut self, input: ColumnVector, expected_output: ColumnVector) -> Result<()> {
+        let (activation, zs) = self.feed_forward(input)?;
+
+        let (nabla_b, nabla_w) = self.calculate_errors(activation, zs, expected_output)?;
+
+        self.backpropagate(nabla_b, nabla_w)
+    }
+
+    fn feed_forward(&self, input: ColumnVector) -> Result<(Vec<ColumnVector>, Vec<ColumnVector>)> {
+        self.layers.iter().try_fold(
+            (vec![input], vec![]),
+            |(mut activations, mut zs), (weights, bias)| {
+                let last_activation = activations.last().unwrap();
+                let z = weights.try_dot(last_activation)?.add(&bias)?;
+                let output = O::activate(&z);
+                activations.push(output);
+                zs.push(z);
+                Ok((activations, zs))
+            },
+        )
     }
 
     pub fn predict(&self, input: ColumnVector) -> Result<ColumnVector> {
-        self.prediction_steps(input)
-            .map(|mut outputs| outputs.pop().unwrap().soft_max())
+        let (mut activations, _) = self.feed_forward(input)?;
+        Ok(activations.pop().unwrap().map(A::activate))
     }
 
     pub fn train_batch<I, T>(&mut self, batch: I) -> Result<()>
@@ -145,7 +153,7 @@ impl NeuralNetwork {
         let iter = batch
             .into_iter()
             .map(Into::<TestCase>::into)
-            .map(TestCase::collapse);
+            .map(Into::into);
         for (input, expected_output) in iter {
             self.train(input, expected_output)?;
         }
@@ -163,7 +171,7 @@ impl NeuralNetwork {
         for (input, expected_output) in batch
             .into_iter()
             .map(Into::<TestCase>::into)
-            .map(TestCase::collapse)
+            .map(Into::into)
         {
             let prediction = self.predict(input)?;
             correct += grade_fn(prediction, expected_output);

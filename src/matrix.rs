@@ -1,6 +1,6 @@
 use std::{
     fmt::Display,
-    ops::{Add, Deref, DerefMut, Div, Mul, Sub},
+    ops::{Add, Deref, DerefMut, Div, Mul, Sub, SubAssign, AddAssign},
 };
 
 use rand::{distributions::Distribution, Rng};
@@ -135,13 +135,7 @@ impl Matrix {
     }
 
     pub fn transpose(&self) -> Matrix {
-        let mut result = Matrix::new(self.cols_count(), self.rows_count());
-        for i in 0..self.rows_count() {
-            for j in 0..self.cols_count() {
-                result[j][i] = self[i][j];
-            }
-        }
-        result
+        self.cols().map(|col| col.transpose()).collect()
     }
 
     pub fn map<F: Fn(f64) -> f64>(&self, f: F) -> Matrix {
@@ -203,14 +197,6 @@ impl Sub for &Matrix {
     }
 }
 
-impl Mul for &Matrix {
-    type Output = Result;
-
-    fn mul(self, other: &Matrix) -> Self::Output {
-        self.apply(&other, f64::mul)
-    }
-}
-
 impl Mul<f64> for &Matrix {
     type Output = Matrix;
 
@@ -239,5 +225,27 @@ impl FromIterator<RowVector> for Matrix {
     fn from_iter<T: IntoIterator<Item = RowVector>>(iter: T) -> Self {
         let data: Vec<RowVector> = iter.into_iter().collect();
         Matrix { data }
+    }
+}
+
+impl SubAssign<&Matrix> for Matrix {
+    fn sub_assign(&mut self, other: &Matrix) {
+        self.check_size(other).unwrap();
+        for (row, row_vec) in self.data.iter_mut().enumerate() {
+            for (col, elem) in row_vec.iter_mut().enumerate() {
+                *elem -= other[row][col];
+            }
+        }
+    }
+}
+
+impl AddAssign<&Matrix> for Matrix {
+    fn add_assign(&mut self, other: &Matrix) {
+        self.check_size(other).unwrap();
+        for (row, row_vec) in self.data.iter_mut().enumerate() {
+            for (col, elem) in row_vec.iter_mut().enumerate() {
+                *elem += other[row][col];
+            }
+        }
     }
 }

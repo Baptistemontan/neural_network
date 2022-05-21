@@ -1,6 +1,6 @@
 #![feature(iterator_try_collect)]
 
-use std::{error::Error, path::Path};
+use std::{error::Error, path::Path, sync::atomic::AtomicUsize, time::Instant};
 
 use img::Img;
 use load_save::{Loadable, Savable};
@@ -8,11 +8,15 @@ use neural::NeuralNetwork;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use vector::Vector;
 
+use activation::{ActivationFunction, SigmoidActivation, OutputActivationFunction};
+
+use crate::activation::{ReLUActivation, SoftMax};
+
+mod activation;
 mod dot_product;
 mod img;
 mod load_save;
 mod matrix;
-// mod neural_old;
 mod neural;
 mod vector;
 
@@ -25,10 +29,10 @@ pub fn load_imgs<P: AsRef<Path>>(
     Ok(imgs)
 }
 
-pub fn train<P: AsRef<Path>>(
+pub fn train<P: AsRef<Path>, A: ActivationFunction, O: OutputActivationFunction>(
     csv_path: P,
     max_count: usize,
-    neural_network: &mut NeuralNetwork,
+    neural_network: &mut NeuralNetwork<A, O>,
 ) -> Result<usize, Box<dyn Error>> {
     println!("Loading training images...");
 
@@ -38,17 +42,23 @@ pub fn train<P: AsRef<Path>>(
 
     println!("Loaded {} training images", size);
 
-    neural_network.train_batch(train_batch.iter())?;
+    let train_batch_iter = train_batch.iter().enumerate().map(|(i, img)| {
+        if i % 100 == 0 {
+            println!("Training {}/{}", i, size);
+        }
+        img
+    });
+
+    neural_network.train_batch(train_batch_iter)?;
 
     Ok(size)
 }
 
-pub fn test<P: AsRef<Path>>(
+pub fn test<P: AsRef<Path>, A: ActivationFunction, O: OutputActivationFunction>(
     csv_path: P,
     take_count: usize,
-    neural_network: &NeuralNetwork,
+    neural_network: &NeuralNetwork<A, O>,
 ) -> Result<(f64, usize), Box<dyn Error>> {
-
     println!("Loading test images...");
 
     let test_batch = load_imgs(csv_path, take_count)?;
@@ -57,12 +67,16 @@ pub fn test<P: AsRef<Path>>(
 
     println!("Loaded {} test images", size);
 
-    let mut i = 0;
-    let score = neural_network.predict_batch(&test_batch, |output, reference| {
+
+    let test_batch_iter = test_batch.iter().enumerate().map(|(i, img)| {
         if i % 100 == 0 {
-            println!("{}", i);
+            println!("Testing {}/{}", i, size);
         }
-        i += 1;
+        img
+    });
+
+
+    let score = neural_network.predict_batch(test_batch_iter, |output, reference| {
         let output_max = output.max_arg();
         let reference_max = reference.max_arg();
         if output_max == reference_max {
@@ -75,7 +89,7 @@ pub fn test<P: AsRef<Path>>(
 }
 
 // fn main() -> Result<(), Box<dyn Error>> {
-//     let mut neural_network = NeuralNetwork::new(784, [500], 10, 0.05);
+//     let mut neural_network: NeuralNetwork<SigmoidActivation> = NeuralNetwork::new(784, [500], 10, 0.05);
 
 //     let start = Instant::now();
 
@@ -111,33 +125,67 @@ pub fn test<P: AsRef<Path>>(
 // }
 
 fn main() -> Result<(), Box<dyn Error>> {
-
-    let training_images = load_imgs("data/mnist_train.csv", 60000)?;
+    let training_images = load_imgs("data/mnist_train.csv", usize::MAX)?;
 
     let test_images = load_imgs("data/mnist_test.csv", usize::MAX)?;
 
+    let index = AtomicUsize::new(0);
 
-    let mut result: Vec<(f64, f64)> = (1..=100).into_par_iter().map(|x| x as f64 / 100.0).map(|learning_rate| {
+    let start = Instant::now();
 
-        println!("Learning rate: {}", learning_rate);
-    
-        let mut neural_network = NeuralNetwork::new(
-            784, 
-            [300], 
-            10, 
-            learning_rate
-        );
-    
-        neural_network.train_batch(&training_images).unwrap();
-    
-        let score = neural_network.predict_batch(
-            &test_images, 
-            |output, reference| {
-            if output.max_arg() == reference.max_arg() { 1.0 } else { 0.0 }
-        }).unwrap();
-    
-        (learning_rate, score)
-    }).collect();
+    let mut result: Vec<(f64, f64)> = (1..=100)
+        .into_par_iter()
+        .map(|x| x as f64 / 100.0)
+        .map(|learning_rate| {
+            let learning_rate_index = index.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+            println!("Learning rate N° {} : {}", learning_rate_index, learning_rate);
+
+            let mut neural_network: NeuralNetwork<SigmoidActivation, SoftMax> =
+                NeuralNetwork::new(784, [300], 10, learning_rate);
+
+            let training_batch_iter = training_images.iter().enumerate().map(|(i, img)| {
+                if i % 500 == 0 {
+                    println!("Learning rate {} Training {}/{}", learning_rate_index, i, training_images.len());
+                }
+                img
+            });
+
+            neural_network.train_batch(training_batch_iter).unwrap();
+
+            let test_batch_iter = test_images.iter().enumerate().map(|(i, img)| {
+                if i % 500 == 0 {
+                    println!("Learning rate {} Testing {}/{}", learning_rate_index, i, test_images.len());
+                }
+                img
+            });
+
+            let score = neural_network
+                .predict_batch(test_batch_iter, |output, reference| {
+                    if output.max_arg() == reference.max_arg() {
+                        1.0
+                    } else {
+                        0.0
+                    }
+                })
+                .unwrap();
+
+            (learning_rate, score)
+        })
+        .collect();
+
+    let elapsed = start.elapsed().as_secs_f64();
+    let minutes = (elapsed / 60.0).floor();
+    let seconds = elapsed % 60.0;
+
+    println!("Training took {} minutes and {} seconds", minutes, seconds);
+
+    let total_size = training_images.len() * 100;
+
+    println!(
+        "Average training time per image: {} ms",
+        elapsed * 1000.0 / total_size as f64
+    );
 
     result.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
 
