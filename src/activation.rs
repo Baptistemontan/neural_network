@@ -1,4 +1,4 @@
-use crate::vector::{ColumnVector, Vector};
+use crate::vector::{ColumnVector};
 
 pub trait ActivationFunction: Send + Sync {
     fn activate(x: f64) -> f64;
@@ -54,7 +54,7 @@ pub struct SoftMax;
 
 impl OutputActivationFunction for SoftMax {
     fn activate(x: &ColumnVector) -> ColumnVector {
-        let sum = x.iter().sum::<f64>();
-        x.map(|x| x / sum)
+        let sum: f64 = x.iter().sum();
+        x / sum
     }
 }

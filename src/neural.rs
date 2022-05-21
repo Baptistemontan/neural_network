@@ -1,6 +1,6 @@
 use std::{
     marker::PhantomData,
-    ops::{Add, Mul}, sync::atomic::{AtomicUsize, Ordering},
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 use rand::distributions::Uniform;
@@ -81,8 +81,8 @@ impl<A: ActivationFunction, O: OutputActivationFunction> NeuralNetwork<A, O> {
         }
     }
 
-    fn calculate_nabla_w(delta: &ColumnVector, activation: &ColumnVector) -> Result<Matrix> {
-        delta.try_dot(&activation.transpose())
+    fn calculate_nabla_w(delta: &ColumnVector, activation: &ColumnVector) -> Matrix {
+        delta.dot(&activation.transpose())
     }
 
     fn calculate_errors(
@@ -95,10 +95,10 @@ impl<A: ActivationFunction, O: OutputActivationFunction> NeuralNetwork<A, O> {
         let last_z_primed = last_z.map(A::activate_prime);
         let final_output = activations.pop().unwrap();
 
-        let cost_gradient = final_output.sub(&expected_output)?;
-        let delta = cost_gradient.hadamard_product(&last_z_primed)?;
+        let cost_gradient = final_output - expected_output;
+        let delta = cost_gradient.hadamard_product(&last_z_primed);
         let activation = activations.pop().unwrap();
-        let mut nabla_w = vec![Self::calculate_nabla_w(&delta, &activation)?];
+        let mut nabla_w = vec![Self::calculate_nabla_w(&delta, &activation)];
         let mut nabla_b = vec![delta];
 
         let iter = self
@@ -112,9 +112,9 @@ impl<A: ActivationFunction, O: OutputActivationFunction> NeuralNetwork<A, O> {
             let old_delta = nabla_b.last().unwrap();
             let delta = weights
                 .transpose()
-                .try_dot(old_delta)?
-                .hadamard_product(&z_primed)?;
-            nabla_w.push(Self::calculate_nabla_w(&delta, &activation)?);
+                .dot(old_delta)
+                .hadamard_product(&z_primed);
+            nabla_w.push(Self::calculate_nabla_w(&delta, &activation));
             nabla_b.push(delta);
         }
         nabla_b.reverse();
@@ -129,8 +129,8 @@ impl<A: ActivationFunction, O: OutputActivationFunction> NeuralNetwork<A, O> {
             .iter_mut()
             .zip(nabla_b.iter().zip(nabla_w.iter()));
         for ((weights, bias), (nabla_b, nabla_w)) in iter {
-            *weights -= &nabla_w.mul(self.learning_rate);
-            *bias = bias.sub(&(nabla_b.scale(self.learning_rate)))?;
+            *weights -= nabla_w * self.learning_rate;
+            *bias -= nabla_b * self.learning_rate;
         }
         Ok(())
     }
@@ -146,28 +146,35 @@ impl<A: ActivationFunction, O: OutputActivationFunction> NeuralNetwork<A, O> {
         input: ColumnVector,
         expected_output: ColumnVector,
     ) -> Result<(Vec<ColumnVector>, Vec<Matrix>)> {
-        let (activation, zs) = self.feed_forward(input)?;
+        let (activation, zs) = self.feed_forward(input);
 
         self.calculate_errors(activation, zs, expected_output)
     }
 
-    fn feed_forward(&self, input: ColumnVector) -> Result<(Vec<ColumnVector>, Vec<ColumnVector>)> {
-        self.layers.iter().try_fold(
+    fn feed_forward(&self, input: ColumnVector) -> (Vec<ColumnVector>, Vec<ColumnVector>) {
+        self.layers.iter().fold(
             (vec![input], vec![]),
             |(mut activations, mut zs), (weights, bias)| {
                 let last_activation = activations.last().unwrap();
-                let z = weights.try_dot(last_activation)?.add(&bias)?;
+                let z = &weights.dot(last_activation) + bias;
                 let output = z.map(A::activate);
                 activations.push(output);
                 zs.push(z);
-                Ok((activations, zs))
+                (activations, zs)
             },
         )
     }
 
     pub fn predict(&self, input: ColumnVector) -> Result<ColumnVector> {
-        let (activations, _) = self.feed_forward(input)?;
-        Ok(O::activate(activations.last().unwrap()))
+        let output = self
+            .layers
+            .iter()
+            .try_fold(input, |input, (weights, bias)| {
+                let z = &weights.try_dot(&input)? + bias;
+                Ok(z.map(A::activate))
+            })?;
+
+        Ok(O::activate(&output))
     }
 
     pub fn train_batch<I, T>(&mut self, batch: I, mini_batch_size: usize) -> Result<()>
@@ -181,38 +188,59 @@ impl<A: ActivationFunction, O: OutputActivationFunction> NeuralNetwork<A, O> {
             .map(Into::<(ColumnVector, ColumnVector)>::into);
 
         let mut count = usize::MAX;
+
+        let sizes: Vec<_> = self
+            .layers
+            .iter()
+            .map(|(weights, bias)| (weights.size(), bias.len()))
+            .collect();
+
+        let identity = || -> (Vec<ColumnVector>, Vec<Matrix>) {
+            let weights: Vec<Matrix> = sizes
+                .iter()
+                .copied()
+                .map(|((rows, cols), _)| Matrix::new(rows, cols))
+                .collect();
+            let biases: Vec<ColumnVector> = sizes
+                .iter()
+                .copied()
+                .map(|(_, cols)| ColumnVector::new(cols))
+                .collect();
+            (biases, weights)
+        };
+
         while count >= mini_batch_size {
             let mini_batch: Vec<(ColumnVector, ColumnVector)> =
                 iter.by_ref().take(mini_batch_size).collect();
             count = mini_batch.len();
-            let gradients = mini_batch
+            let (mut nabla_b, mut nabla_w) = mini_batch
                 .into_par_iter()
                 .map(|(input, expected_output)| self.calculate_gradient(input, expected_output))
-                .collect::<Vec<Result<(Vec<ColumnVector>, Vec<Matrix>)>>>();
-
-            let gradients: Vec<(Vec<ColumnVector>, Vec<Matrix>)> = gradients.into_iter().try_collect()?;
-
-            let nablas: Option<(Vec<ColumnVector>, Vec<Matrix>)> = gradients
-                .into_iter()
-                .try_reduce(|(nabla_b_acc, nabla_w_acc), (nabla_b, nabla_w)| {
-                    let new_nabla_b_acc = nabla_b_acc
-                        .iter()
-                        .zip(nabla_b.iter())
-                        .map(|(a, b)| a.add(b))
-                        .try_collect()?;
-                    let new_nabla_w_acc = nabla_w_acc
-                        .iter()
-                        .zip(nabla_w.iter())
-                        .map(|(a, b)| a.add(b))
-                        .try_collect()?;
-                    Ok((new_nabla_b_acc, new_nabla_w_acc))
-                })?;
-
-            if let Some((mut nabla_b, mut nabla_w)) = nablas {
-                nabla_b.iter_mut().for_each(|nabla_b| *nabla_b = nabla_b.scale(1.0 / count as f64));
-                nabla_w.iter_mut().for_each(|nabla_w| *nabla_w = nabla_w.mul(1.0 / count as f64));
-                self.backpropagate(nabla_b, nabla_w)?;
-            }
+                .try_reduce(
+                    identity,
+                    |(mut acc_nabla_b, mut acc_nabla_w), (nabla_b, nabla_w)| {
+                        acc_nabla_b
+                            .iter_mut()
+                            .zip(nabla_b.iter())
+                            .for_each(|(a, b)| {
+                                *a += b;
+                            });
+                        acc_nabla_w
+                            .iter_mut()
+                            .zip(nabla_w.iter())
+                            .for_each(|(a, b)| {
+                                *a += b;
+                            });
+                        Ok((acc_nabla_b, acc_nabla_w))
+                    },
+                )?;
+            nabla_b
+                .iter_mut()
+                .for_each(|nabla_b| *nabla_b *= 1.0 / mini_batch_size as f64);
+            nabla_w
+                .iter_mut()
+                .for_each(|nabla_w| *nabla_w *= 1.0 / mini_batch_size as f64);
+            self.backpropagate(nabla_b, nabla_w)?;
         }
         Ok(())
     }
@@ -223,25 +251,21 @@ impl<A: ActivationFunction, O: OutputActivationFunction> NeuralNetwork<A, O> {
         T: Into<TestCase>,
         F: Fn(ColumnVector, ColumnVector) -> f64 + Send + Sync,
     {
-        let results: Vec<Result<f64>> = batch
+        let count = AtomicUsize::new(0);
+        let results = batch
             .into_par_iter()
-            .map(Into::<TestCase>::into)
-            .map(Into::<(ColumnVector, ColumnVector)>::into)
-            .map(|(input, expected_output)| {
+            .map(|data| {
+                let testcase: TestCase = data.into();
+                let (input, expected_output) = testcase.into();
                 let output = self.predict(input)?;
                 let grade = grade_fn(output, expected_output);
+                count.fetch_add(1, Ordering::SeqCst);
                 Ok(grade)
             })
-            .collect();
+            .try_reduce(|| 0.0, |acc, grade| Ok(acc + grade))?;
 
-        let batch_size = results.len();
+        let total_count = count.load(Ordering::SeqCst);
 
-        let score = results.into_iter().try_fold(0.0, |acc, result| {
-            let grade = result?;
-            Ok(acc + grade)
-        })?;
-    
-    
-        Ok(score / batch_size as f64)
+        Ok(results / total_count as f64)
     }
 }

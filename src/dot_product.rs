@@ -1,4 +1,4 @@
-use crate::vector::{ColumnVector, RowVector, Vector};
+use crate::vector::{ColumnVector, RowVector};
 
 use crate::matrix::{Matrix, MatrixOpError, Result};
 
@@ -96,7 +96,7 @@ impl DotProduct<RowVector> for ColumnVector {
     type Output = Matrix;
 
     fn dot(&self, other: &RowVector) -> Self::Output {
-        self.iter().map(|col| other.scale(*col)).collect()
+        self.iter().map(|col| other * *col).collect()
     }
 
     fn try_dot(&self, other: &RowVector) -> Result<Self::Output> {

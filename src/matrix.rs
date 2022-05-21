@@ -1,6 +1,6 @@
 use std::{
     fmt::Display,
-    ops::{Add, Deref, DerefMut, Div, Mul, Sub, SubAssign, AddAssign},
+    ops::{Add, AddAssign, Deref, DerefMut, Div, Mul, MulAssign, Sub, SubAssign},
 };
 
 use rand::{distributions::Distribution, Rng};
@@ -181,6 +181,13 @@ impl DerefMut for Matrix {
     }
 }
 
+impl FromIterator<RowVector> for Matrix {
+    fn from_iter<T: IntoIterator<Item = RowVector>>(iter: T) -> Self {
+        let data: Vec<RowVector> = iter.into_iter().collect();
+        Matrix { data }
+    }
+}
+
 impl Add for &Matrix {
     type Output = Result;
 
@@ -221,21 +228,18 @@ impl Div<f64> for &Matrix {
     }
 }
 
-impl FromIterator<RowVector> for Matrix {
-    fn from_iter<T: IntoIterator<Item = RowVector>>(iter: T) -> Self {
-        let data: Vec<RowVector> = iter.into_iter().collect();
-        Matrix { data }
-    }
-}
-
 impl SubAssign<&Matrix> for Matrix {
     fn sub_assign(&mut self, other: &Matrix) {
         self.check_size(other).unwrap();
         for (row, row_vec) in self.data.iter_mut().enumerate() {
-            for (col, elem) in row_vec.iter_mut().enumerate() {
-                *elem -= other[row][col];
-            }
+            *row_vec -= &other[row];
         }
+    }
+}
+
+impl SubAssign for Matrix {
+    fn sub_assign(&mut self, other: Self) {
+        *self -= &other;
     }
 }
 
@@ -243,9 +247,21 @@ impl AddAssign<&Matrix> for Matrix {
     fn add_assign(&mut self, other: &Matrix) {
         self.check_size(other).unwrap();
         for (row, row_vec) in self.data.iter_mut().enumerate() {
-            for (col, elem) in row_vec.iter_mut().enumerate() {
-                *elem += other[row][col];
-            }
+            *row_vec += &other[row];
+        }
+    }
+}
+
+impl AddAssign for Matrix {
+    fn add_assign(&mut self, other: Self) {
+        *self += &other;
+    }
+}
+
+impl MulAssign<f64> for Matrix {
+    fn mul_assign(&mut self, other: f64) {
+        for row in self.data.iter_mut() {
+            *row *= other;
         }
     }
 }

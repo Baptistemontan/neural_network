@@ -1,15 +1,20 @@
 #![feature(iterator_try_collect)]
 #![feature(iterator_try_reduce)]
 
-use std::{error::Error, path::Path, sync::atomic::{AtomicUsize, Ordering}, time::Instant};
+use std::{
+    error::Error,
+    path::Path,
+    sync::atomic::{AtomicUsize, Ordering},
+    time::Instant,
+};
 
 use img::Img;
 use load_save::{Loadable, Savable};
 use neural::NeuralNetwork;
-use rayon::iter::{IntoParallelIterator, ParallelIterator, IntoParallelRefIterator};
+use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use vector::Vector;
 
-use activation::{ActivationFunction, SigmoidActivation, OutputActivationFunction};
+use activation::{ActivationFunction, OutputActivationFunction, SigmoidActivation};
 
 use crate::activation::{ReLUActivation, SoftMax};
 
@@ -50,7 +55,7 @@ pub fn train<P: AsRef<Path>, A: ActivationFunction, O: OutputActivationFunction>
         img
     });
 
-    neural_network.train_batch(train_batch_iter, 20)?;
+    neural_network.train_batch(train_batch_iter, 50)?;
 
     Ok(size)
 }
@@ -70,7 +75,6 @@ pub fn test<P: AsRef<Path>, A: ActivationFunction, O: OutputActivationFunction>(
 
     let image_index = AtomicUsize::new(0);
 
-
     let test_batch_iter = test_batch.par_iter().map(|img| {
         let i = image_index.fetch_add(1, Ordering::SeqCst);
         if i % 100 == 0 {
@@ -78,7 +82,6 @@ pub fn test<P: AsRef<Path>, A: ActivationFunction, O: OutputActivationFunction>(
         }
         img
     });
-
 
     let score = neural_network.predict_batch(test_batch_iter, |output, reference| {
         let output_max = output.max_arg();
@@ -93,11 +96,11 @@ pub fn test<P: AsRef<Path>, A: ActivationFunction, O: OutputActivationFunction>(
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-
-    let mut neural_network: NeuralNetwork<SigmoidActivation, SoftMax> = NeuralNetwork::new(784, [500], 10, 0.2);
+    let mut neural_network: NeuralNetwork<ReLUActivation, SoftMax> =
+        NeuralNetwork::new(784, [500, 300, 100], 10, 0.2);
     let start = Instant::now();
 
-    let batch_size = train("data/mnist_train.csv", usize::MAX, &mut neural_network)?;
+    let batch_size = train("data/mnist_train.csv", 10000, &mut neural_network)?;
 
     let elapsed = start.elapsed();
 
