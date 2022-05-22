@@ -3,6 +3,7 @@
 
 use std::{
     error::Error,
+    ops::{Bound, Range, RangeBounds},
     path::Path,
     sync::atomic::{AtomicUsize, Ordering},
     time::Instant,
@@ -16,7 +17,7 @@ use vector::Vector;
 
 use activation::{ActivationFunction, OutputActivationFunction, SigmoidActivation};
 
-use crate::activation::{ReLUActivation, SoftMax};
+use crate::activation::{LeakyReLUActivation, ReLUActivation, SoftMax, TanhActivation};
 
 mod activation;
 mod dot_product;
@@ -26,23 +27,41 @@ mod matrix;
 mod neural;
 mod vector;
 
-pub fn load_imgs<P: AsRef<Path>>(
+pub fn load_imgs<P: AsRef<Path>, R: RangeBounds<usize>>(
     csv_path: P,
-    take_count: usize,
+    range: R,
 ) -> Result<Vec<Img>, Box<dyn Error>> {
+    let start = match range.start_bound() {
+        Bound::Included(start) => *start,
+        Bound::Excluded(start) => *start + 1, // could be usize::MAX, but meh
+        Bound::Unbounded => 0,
+    };
+
+    let end = match range.end_bound() {
+        Bound::Included(end) => *end + 1, // same here
+        Bound::Excluded(end) => *end,
+        Bound::Unbounded => usize::MAX,
+    };
+    let total = if start >= end { 0 } else { end - start };
+
     let imgs_loader = Img::load_from_csv(csv_path)?;
-    let imgs: Vec<Img> = imgs_loader.take(take_count).try_collect()?;
+    let imgs: Vec<Img> = imgs_loader.skip(start).take(total).try_collect()?;
     Ok(imgs)
 }
 
-pub fn train<P: AsRef<Path>, A: ActivationFunction, O: OutputActivationFunction>(
+pub fn train<
+    P: AsRef<Path>,
+    A: ActivationFunction,
+    O: OutputActivationFunction,
+    R: RangeBounds<usize>,
+>(
     csv_path: P,
-    max_count: usize,
+    range: R,
     neural_network: &mut NeuralNetwork<A, O>,
 ) -> Result<usize, Box<dyn Error>> {
     println!("Loading training images...");
 
-    let train_batch = load_imgs(csv_path, max_count)?;
+    let train_batch = load_imgs(csv_path, range)?;
 
     let size = train_batch.len();
 
@@ -55,19 +74,24 @@ pub fn train<P: AsRef<Path>, A: ActivationFunction, O: OutputActivationFunction>
         img
     });
 
-    neural_network.train_batch(train_batch_iter, 50)?;
+    neural_network.train_batch(train_batch_iter, 50);
 
     Ok(size)
 }
 
-pub fn test<P: AsRef<Path>, A: ActivationFunction, O: OutputActivationFunction>(
+pub fn test<
+    P: AsRef<Path>,
+    A: ActivationFunction,
+    O: OutputActivationFunction,
+    R: RangeBounds<usize>,
+>(
     csv_path: P,
-    take_count: usize,
+    range: R,
     neural_network: &NeuralNetwork<A, O>,
 ) -> Result<(f64, usize), Box<dyn Error>> {
     println!("Loading test images...");
 
-    let test_batch = load_imgs(csv_path, take_count)?;
+    let test_batch = load_imgs(csv_path, range)?;
 
     let size = test_batch.len();
 
@@ -91,16 +115,18 @@ pub fn test<P: AsRef<Path>, A: ActivationFunction, O: OutputActivationFunction>(
         } else {
             0.0
         }
-    })?;
+    });
     Ok((score, size))
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let mut neural_network: NeuralNetwork<ReLUActivation, SoftMax> =
-        NeuralNetwork::new(784, [500, 300, 100], 10, 0.2);
+    let mut neural_network: NeuralNetwork<_, _> =
+        NeuralNetwork::new(784, [300], 10, 0.005, ReLUActivation, SoftMax);
     let start = Instant::now();
 
-    let batch_size = train("data/mnist_train.csv", 10000, &mut neural_network)?;
+    let batch_size = train("data/mnist_train.csv", .., &mut neural_network)?;
+
+    // println!("nn: {:?}", neural_network);
 
     let elapsed = start.elapsed();
 
@@ -115,7 +141,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let start = Instant::now();
 
-    let (score, batch_size) = test("data/mnist_test.csv", usize::MAX, &neural_network)?;
+    let (score, batch_size) = test("data/mnist_test.csv", .., &neural_network)?;
 
     let elapsed = start.elapsed();
 

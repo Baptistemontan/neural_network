@@ -1,5 +1,7 @@
-use std::ops::{AddAssign, Deref, DerefMut, MulAssign, SubAssign, DivAssign, Add, Sub, Div, Mul, Neg};
 use serde::{Deserialize, Serialize};
+use std::ops::{
+    Add, AddAssign, Deref, DerefMut, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign,
+};
 
 use crate::matrix::{MatrixOpError, Result};
 use rand::{prelude::Distribution, Rng};
@@ -151,10 +153,10 @@ macro_rules! impl_vector_ops {
                 *self -= &other;
             }
         }
-        
+
         impl Add for &$name {
             type Output = $name;
-        
+
             fn add(self, other: &$name) -> Self::Output {
                 self.apply(other, f64::add)
             }
@@ -162,24 +164,24 @@ macro_rules! impl_vector_ops {
 
         impl Sub for &$name {
             type Output = $name;
-        
+
             fn sub(self, other: &$name) -> Self::Output {
                 self.apply(other, f64::sub)
             }
         }
-        
+
         impl Add for $name {
             type Output = $name;
-            
+
             fn add(mut self, other: $name) -> Self::Output {
                 self += &other;
                 self
             }
         }
-        
+
         impl Sub for $name {
             type Output = $name;
-        
+
             fn sub(mut self, other: $name) -> Self::Output {
                 self -= &other;
                 self
@@ -238,7 +240,7 @@ macro_rules! impl_vector_ops {
                 self.map(|x| -x)
             }
         }
-        
+
         impl DivAssign<f64> for $name {
             fn div_assign(&mut self, other: f64) {
                 self.map_assign(|x| *x /= other);
@@ -250,10 +252,10 @@ macro_rules! impl_vector_ops {
                 self.map_assign(|x| *x *= other);
             }
         }
-        
+
         impl Div<f64> for &$name {
             type Output = $name;
-        
+
             fn div(self, other: f64) -> Self::Output {
                 self.map(|x| x / other)
             }
@@ -261,32 +263,31 @@ macro_rules! impl_vector_ops {
 
         impl Mul<f64> for &$name {
             type Output = $name;
-        
+
             fn mul(self, other: f64) -> Self::Output {
                 self.map(|x| x * other)
             }
         }
-        
+
         impl Div<f64> for $name {
             type Output = $name;
-        
+
             fn div(mut self, other: f64) -> Self::Output {
                 self /= other;
                 self
             }
         }
-        
+
         impl Mul<f64> for $name {
             type Output = $name;
-        
+
             fn mul(mut self, other: f64) -> Self::Output {
                 self *= other;
                 self
             }
         }
-    }
+    };
 }
-
 
 impl_vector!(ColumnVector, RowVector);
 impl_vector_ops!(ColumnVector);

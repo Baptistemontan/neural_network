@@ -18,8 +18,8 @@ use crate::{
 pub struct NeuralNetwork<D, A> {
     learning_rate: f64,
     layers: Vec<(Matrix, ColumnVector)>,
-    _hidden_layer_activation: PhantomData<D>,
-    _output_layer_activation: PhantomData<A>,
+    hidden_layer_activation: D,
+    output_layer_activation: A,
 }
 
 pub fn unifom_distrib(n: f64) -> Uniform<f64> {
@@ -54,6 +54,8 @@ impl<A: ActivationFunction, O: OutputActivationFunction> NeuralNetwork<A, O> {
         hidden_sizes: I,
         output_size: usize,
         learning_rate: f64,
+        hidden_layer_activation: A,
+        output_layer_activation: O,
     ) -> Self
     where
         I: IntoIterator<Item = usize>,
@@ -76,8 +78,8 @@ impl<A: ActivationFunction, O: OutputActivationFunction> NeuralNetwork<A, O> {
         NeuralNetwork {
             learning_rate,
             layers,
-            _hidden_layer_activation: PhantomData,
-            _output_layer_activation: PhantomData,
+            hidden_layer_activation,
+            output_layer_activation,
         }
     }
 
@@ -91,8 +93,9 @@ impl<A: ActivationFunction, O: OutputActivationFunction> NeuralNetwork<A, O> {
         mut zs: Vec<ColumnVector>,
         expected_output: ColumnVector,
     ) -> (Vec<ColumnVector>, Vec<Matrix>) {
+        let activate_prime = |x| self.hidden_layer_activation.activate_prime(x);
         let last_z = zs.pop().unwrap();
-        let last_z_primed = last_z.map(A::activate_prime);
+        let last_z_primed = last_z.map(activate_prime);
         let final_output = activations.pop().unwrap();
 
         let cost_gradient = final_output - expected_output;
@@ -108,7 +111,7 @@ impl<A: ActivationFunction, O: OutputActivationFunction> NeuralNetwork<A, O> {
             .zip(zs.iter().zip(activations.iter()).rev());
 
         for ((weights, _bias), (z, activation)) in iter {
-            let z_primed = z.map(A::activate_prime);
+            let z_primed = z.map(activate_prime);
             let old_delta = nabla_b.last().unwrap();
             let delta = weights
                 .transpose()
@@ -156,7 +159,7 @@ impl<A: ActivationFunction, O: OutputActivationFunction> NeuralNetwork<A, O> {
             |(mut activations, mut zs), (weights, bias)| {
                 let last_activation = activations.last().unwrap();
                 let z = &weights.dot(last_activation) + bias;
-                let output = z.map(A::activate);
+                let output = z.map(|x| self.hidden_layer_activation.activate(x));
                 activations.push(output);
                 zs.push(z);
                 (activations, zs)
@@ -165,17 +168,12 @@ impl<A: ActivationFunction, O: OutputActivationFunction> NeuralNetwork<A, O> {
     }
 
     pub fn predict(&self, input: ColumnVector) -> ColumnVector {
-        let output = self
-            .layers
-            .iter()
-            .fold(input, |input, (weights, bias)| {
-                let z = &weights.dot(&input) + bias;
-                z.map(A::activate)
-            });
+        let output = self.layers.iter().fold(input, |input, (weights, bias)| {
+            let z = &weights.dot(&input) + bias;
+            z.map(|x| self.hidden_layer_activation.activate(x))
+        });
 
-        // println!("{:?}", output);
-
-        O::activate(output)
+        self.output_layer_activation.activate(output)
     }
 
     pub fn train_batch<I, T>(&mut self, batch: I, mini_batch_size: usize)
@@ -252,7 +250,7 @@ impl<A: ActivationFunction, O: OutputActivationFunction> NeuralNetwork<A, O> {
         F: Fn(ColumnVector, ColumnVector) -> f64 + Send + Sync,
     {
         let count = AtomicUsize::new(0);
-        
+
         let results: f64 = batch
             .into_par_iter()
             .map(|data| {
@@ -265,7 +263,6 @@ impl<A: ActivationFunction, O: OutputActivationFunction> NeuralNetwork<A, O> {
             })
             .sum();
 
-            
         let total_count = count.load(Ordering::SeqCst);
         results / total_count as f64
     }
