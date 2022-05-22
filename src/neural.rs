@@ -90,7 +90,7 @@ impl<A: ActivationFunction, O: OutputActivationFunction> NeuralNetwork<A, O> {
         mut activations: Vec<ColumnVector>,
         mut zs: Vec<ColumnVector>,
         expected_output: ColumnVector,
-    ) -> Result<(Vec<ColumnVector>, Vec<Matrix>)> {
+    ) -> (Vec<ColumnVector>, Vec<Matrix>) {
         let last_z = zs.pop().unwrap();
         let last_z_primed = last_z.map(A::activate_prime);
         let final_output = activations.pop().unwrap();
@@ -120,10 +120,10 @@ impl<A: ActivationFunction, O: OutputActivationFunction> NeuralNetwork<A, O> {
         nabla_b.reverse();
         nabla_w.reverse();
 
-        Ok((nabla_b, nabla_w))
+        (nabla_b, nabla_w)
     }
 
-    fn backpropagate(&mut self, nabla_b: Vec<ColumnVector>, nabla_w: Vec<Matrix>) -> Result<()> {
+    fn backpropagate(&mut self, nabla_b: Vec<ColumnVector>, nabla_w: Vec<Matrix>) {
         let iter = self
             .layers
             .iter_mut()
@@ -132,7 +132,6 @@ impl<A: ActivationFunction, O: OutputActivationFunction> NeuralNetwork<A, O> {
             *weights -= nabla_w * self.learning_rate;
             *bias -= nabla_b * self.learning_rate;
         }
-        Ok(())
     }
 
     // pub fn train(&mut self, input: ColumnVector, expected_output: ColumnVector) -> Result<()> {
@@ -145,7 +144,7 @@ impl<A: ActivationFunction, O: OutputActivationFunction> NeuralNetwork<A, O> {
         &self,
         input: ColumnVector,
         expected_output: ColumnVector,
-    ) -> Result<(Vec<ColumnVector>, Vec<Matrix>)> {
+    ) -> (Vec<ColumnVector>, Vec<Matrix>) {
         let (activation, zs) = self.feed_forward(input);
 
         self.calculate_errors(activation, zs, expected_output)
@@ -165,19 +164,21 @@ impl<A: ActivationFunction, O: OutputActivationFunction> NeuralNetwork<A, O> {
         )
     }
 
-    pub fn predict(&self, input: ColumnVector) -> Result<ColumnVector> {
+    pub fn predict(&self, input: ColumnVector) -> ColumnVector {
         let output = self
             .layers
             .iter()
-            .try_fold(input, |input, (weights, bias)| {
-                let z = &weights.try_dot(&input)? + bias;
-                Ok(z.map(A::activate))
-            })?;
+            .fold(input, |input, (weights, bias)| {
+                let z = &weights.dot(&input) + bias;
+                z.map(A::activate)
+            });
 
-        Ok(O::activate(&output))
+        // println!("{:?}", output);
+
+        O::activate(output)
     }
 
-    pub fn train_batch<I, T>(&mut self, batch: I, mini_batch_size: usize) -> Result<()>
+    pub fn train_batch<I, T>(&mut self, batch: I, mini_batch_size: usize)
     where
         I: IntoIterator<Item = T>,
         T: Into<TestCase>,
@@ -216,7 +217,7 @@ impl<A: ActivationFunction, O: OutputActivationFunction> NeuralNetwork<A, O> {
             let (mut nabla_b, mut nabla_w) = mini_batch
                 .into_par_iter()
                 .map(|(input, expected_output)| self.calculate_gradient(input, expected_output))
-                .try_reduce(
+                .reduce(
                     identity,
                     |(mut acc_nabla_b, mut acc_nabla_w), (nabla_b, nabla_w)| {
                         acc_nabla_b
@@ -231,41 +232,41 @@ impl<A: ActivationFunction, O: OutputActivationFunction> NeuralNetwork<A, O> {
                             .for_each(|(a, b)| {
                                 *a += b;
                             });
-                        Ok((acc_nabla_b, acc_nabla_w))
+                        (acc_nabla_b, acc_nabla_w)
                     },
-                )?;
+                );
             nabla_b
                 .iter_mut()
                 .for_each(|nabla_b| *nabla_b *= 1.0 / mini_batch_size as f64);
             nabla_w
                 .iter_mut()
                 .for_each(|nabla_w| *nabla_w *= 1.0 / mini_batch_size as f64);
-            self.backpropagate(nabla_b, nabla_w)?;
+            self.backpropagate(nabla_b, nabla_w);
         }
-        Ok(())
     }
 
-    pub fn predict_batch<F, T, I>(&self, batch: I, grade_fn: F) -> Result<f64>
+    pub fn predict_batch<F, T, I>(&self, batch: I, grade_fn: F) -> f64
     where
         I: IntoParallelIterator<Item = T>,
         T: Into<TestCase>,
         F: Fn(ColumnVector, ColumnVector) -> f64 + Send + Sync,
     {
         let count = AtomicUsize::new(0);
-        let results = batch
+        
+        let results: f64 = batch
             .into_par_iter()
             .map(|data| {
                 let testcase: TestCase = data.into();
                 let (input, expected_output) = testcase.into();
-                let output = self.predict(input)?;
+                let output = self.predict(input);
                 let grade = grade_fn(output, expected_output);
                 count.fetch_add(1, Ordering::SeqCst);
-                Ok(grade)
+                grade
             })
-            .try_reduce(|| 0.0, |acc, grade| Ok(acc + grade))?;
+            .sum();
 
+            
         let total_count = count.load(Ordering::SeqCst);
-
-        Ok(results / total_count as f64)
+        results / total_count as f64
     }
 }
