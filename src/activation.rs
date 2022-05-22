@@ -1,4 +1,4 @@
-use crate::vector::{ColumnVector};
+use crate::vector::{ColumnVector, Vector};
 
 pub trait ActivationFunction: Send + Sync {
     fn activate(x: f64) -> f64;
@@ -6,6 +6,7 @@ pub trait ActivationFunction: Send + Sync {
     fn activate_prime(x: f64) -> f64;
 }
 
+#[derive(Debug)]
 pub struct SigmoidActivation;
 
 impl ActivationFunction for SigmoidActivation {
@@ -17,7 +18,7 @@ impl ActivationFunction for SigmoidActivation {
         Self::activate(x) * (1.0 - Self::activate(x))
     }
 }
-
+#[derive(Debug)]
 pub struct TanhActivation;
 
 impl ActivationFunction for TanhActivation {
@@ -30,6 +31,7 @@ impl ActivationFunction for TanhActivation {
     }
 }
 
+#[derive(Debug)]
 pub struct ReLUActivation;
 
 impl ActivationFunction for ReLUActivation {
@@ -47,14 +49,16 @@ impl ActivationFunction for ReLUActivation {
 }
 
 pub trait OutputActivationFunction: Send + Sync {
-    fn activate(x: &ColumnVector) -> ColumnVector;
+    fn activate(x: ColumnVector) -> ColumnVector;
 }
 
+#[derive(Debug)]
 pub struct SoftMax;
 
 impl OutputActivationFunction for SoftMax {
-    fn activate(x: &ColumnVector) -> ColumnVector {
-        let sum: f64 = x.iter().sum();
-        x / sum
+    fn activate(mut x: ColumnVector) -> ColumnVector {
+        let sum: f64 = x.iter().copied().map(f64::exp).sum();
+        x.map_assign(|x| *x = x.exp() / sum);
+        x
     }
 }
